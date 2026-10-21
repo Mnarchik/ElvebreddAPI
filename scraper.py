@@ -18,16 +18,9 @@ def slugify(name):
 
 
 def fetch_raw():
-    import cloudscraper
+    from curl_cffi import requests
 
-    scraper = cloudscraper.create_scraper(
-        browser={
-            "browser": "chrome",
-            "platform": "android",
-            "desktop": False,
-        }
-    )
-    resp = scraper.get(SOURCE_URL, timeout=30)
+    resp = requests.get(SOURCE_URL, impersonate="chrome", timeout=30)
     resp.raise_for_status()
     chunks = PUSH_PATTERN.findall(resp.text)
     payload = "".join(json.loads(c) for c in chunks)
