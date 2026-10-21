@@ -7,16 +7,14 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 import uvicorn
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("adopt-me-api")
 
 DATA_PATH = "data/values.json"
-SCRAPE_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+SCRAPE_INTERVAL_SECONDS = 10 * 60
 
 
 def run_scraper_safe():
-    """Runs the scraper and catches any exceptions so the server doesn't crash."""
     try:
         from scraper import write_snapshot
 
@@ -29,24 +27,19 @@ def run_scraper_safe():
 
 
 async def schedule_scraper():
-    """Background task running every 10 minutes."""
     while True:
-        # Run synchronous scraping function in a separate thread so it doesn't block the API
         await asyncio.to_thread(run_scraper_safe)
         await asyncio.sleep(SCRAPE_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initial scrape on boot if data file does not exist yet
     if not os.path.exists(DATA_PATH):
         logger.info("values.json not found on startup, scraping immediately...")
         await asyncio.to_thread(run_scraper_safe)
 
-    # Start the 10-minute background task
     task = asyncio.create_task(schedule_scraper())
     yield
-    # Cancel the task on shutdown
     task.cancel()
 
 
@@ -59,7 +52,6 @@ app = FastAPI(
 
 
 def load_dataset():
-    """Helper function to load the latest snapshot."""
     if not os.path.exists(DATA_PATH):
         raise HTTPException(
             status_code=503,
@@ -93,9 +85,7 @@ def get_items(
     if type:
         items = [i for i in items if i.get("type", "").lower() == type.lower()]
     if rarity:
-        items = [
-            i for i in items if i.get("rarity", "").lower() == rarity.lower()
-        ]
+        items = [i for i in items if i.get("rarity", "").lower() == rarity.lower()]
 
     total_matched = len(items)
     paginated_items = items[offset : offset + limit]
@@ -118,14 +108,11 @@ def get_item_by_slug(slug: str):
         if item.get("slug") == slug_lower:
             return item
 
-    raise HTTPException(
-        status_code=404, detail=f"Item with slug '{slug}' not found"
-    )
+    raise HTTPException(status_code=404, detail=f"Item with slug '{slug}' not found")
 
 
 @app.post("/refresh")
 async def trigger_refresh():
-    """Manual endpoint to force an immediate refresh."""
     updated = await asyncio.to_thread(run_scraper_safe)
     return {"status": "success", "updated": updated}
 
