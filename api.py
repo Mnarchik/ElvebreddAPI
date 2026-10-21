@@ -1,16 +1,61 @@
+import asyncio
+from contextlib import asynccontextmanager
 import json
+import logging
 import os
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 import uvicorn
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("adopt-me-api")
+
+DATA_PATH = "data/values.json"
+SCRAPE_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+
+
+def run_scraper_safe():
+    """Runs the scraper and catches any exceptions so the server doesn't crash."""
+    try:
+        from scraper import write_snapshot
+
+        updated = write_snapshot(path=DATA_PATH)
+        logger.info(f"Background scrape complete. Updated: {updated}")
+        return updated
+    except Exception as e:
+        logger.error(f"Error during background scrape: {e}")
+        return False
+
+
+async def schedule_scraper():
+    """Background task running every 10 minutes."""
+    while True:
+        # Run synchronous scraping function in a separate thread so it doesn't block the API
+        await asyncio.to_thread(run_scraper_safe)
+        await asyncio.sleep(SCRAPE_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initial scrape on boot if data file does not exist yet
+    if not os.path.exists(DATA_PATH):
+        logger.info("values.json not found on startup, scraping immediately...")
+        await asyncio.to_thread(run_scraper_safe)
+
+    # Start the 10-minute background task
+    task = asyncio.create_task(schedule_scraper())
+    yield
+    # Cancel the task on shutdown
+    task.cancel()
+
+
 app = FastAPI(
     title="Adopt Me Values API",
     description="REST API serving data scraped from Elvebredd",
     version="1.0.0",
+    lifespan=lifespan,
 )
-
-DATA_PATH = "data/values.json"
 
 
 def load_dataset():
@@ -18,7 +63,7 @@ def load_dataset():
     if not os.path.exists(DATA_PATH):
         raise HTTPException(
             status_code=503,
-            detail="Values data not found. Please run scraper.py first.",
+            detail="Values data not ready yet. Please try again shortly.",
         )
     with open(DATA_PATH, "r") as f:
         return json.load(f)
@@ -26,7 +71,6 @@ def load_dataset():
 
 @app.get("/health")
 def health_check():
-    """Health and metadata endpoint."""
     data = load_dataset()
     return {
         "status": "ok",
@@ -38,18 +82,11 @@ def health_check():
 
 @app.get("/items")
 def get_items(
-    type: Optional[str] = Query(
-        None,
-        description="Filter by item type (e.g. 'pets', 'toys', 'vehicles')",
-    ),
-    rarity: Optional[str] = Query(
-        None,
-        description="Filter by rarity (e.g. 'legendary', 'ultra rare')",
-    ),
+    type: Optional[str] = Query(None, description="Filter by item type"),
+    rarity: Optional[str] = Query(None, description="Filter by rarity"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    """Retrieve items with optional filtering and pagination."""
     data = load_dataset()
     items = data.get("items", [])
 
@@ -73,7 +110,6 @@ def get_items(
 
 @app.get("/items/{slug}")
 def get_item_by_slug(slug: str):
-    """Fetch a single item by its URL slug (e.g. 'bat-dragon', 'shadow-dragon')."""
     data = load_dataset()
     items = data.get("items", [])
 
@@ -88,17 +124,12 @@ def get_item_by_slug(slug: str):
 
 
 @app.post("/refresh")
-def trigger_refresh():
-    """Triggers the scraper to update values.json from the live website."""
-    try:
-        from scraper import write_snapshot
-
-        updated = write_snapshot()
-        return {"status": "success", "updated": updated}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def trigger_refresh():
+    """Manual endpoint to force an immediate refresh."""
+    updated = await asyncio.to_thread(run_scraper_safe)
+    return {"status": "success", "updated": updated}
 
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
-  
+    
