@@ -1,4 +1,3 @@
 fastapi
 uvicorn
-cloudscraper
-
+curl_cffi
